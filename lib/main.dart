@@ -135,26 +135,74 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   ),
                 ),
                 Expanded(
-                  child: ListView.builder(
-                    itemCount: _playlist.length,
-                    itemBuilder: (context, index) {
-                      final isCurrent = index == _currentIndex;
-                      return ListTile(
-                        leading: Icon(
-                          isCurrent ? Icons.play_arrow : Icons.music_note,
-                          color: isCurrent ? Colors.blue : null,
-                        ),
-                        title: Text(_playlist[index].split('/').last),
-                        selected: isCurrent,
-                        onTap: () async {
-                          setState(() {
-                            _currentIndex = index;
-                          });
-                          await _playAudio();
-                        },
-                      );
+                  child: ReorderableListView(
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        final item = _playlist.removeAt(oldIndex);
+                        _playlist.insert(newIndex, item);
+                        if (_currentIndex == oldIndex) {
+                          _currentIndex = newIndex;
+                        } else if (_currentIndex > oldIndex &&
+                            _currentIndex <= newIndex) {
+                          _currentIndex--;
+                        } else if (_currentIndex < oldIndex &&
+                            _currentIndex >= newIndex) {
+                          _currentIndex++;
+                        }
+                      });
                     },
+                    children: [
+                      for (int index = 0; index < _playlist.length; index++)
+                        ListTile(
+                          key: ValueKey(_playlist[index]),
+                          leading: Icon(
+                            index == _currentIndex
+                                ? Icons.play_arrow
+                                : Icons.music_note,
+                            color: index == _currentIndex ? Colors.blue : null,
+                          ),
+                          title: Text(_playlist[index].split('/').last),
+                          selected: index == _currentIndex,
+                          onTap: () async {
+                            setState(() {
+                              _currentIndex = index;
+                            });
+                            await _playAudio();
+                          },
+                        ),
+                    ],
                   ),
+                ),
+                Column(
+                  children: [
+                    Text(
+                      'Canción actual: ' +
+                          (_playlist.isNotEmpty
+                              ? _playlist[_currentIndex].split('/').last
+                              : 'N/A'),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    StreamBuilder<Duration?>(
+                      stream: _audioPlayer.durationStream,
+                      builder: (context, snapshot) {
+                        final duration = snapshot.data ?? Duration.zero;
+                        return Text(
+                            'Duración: ${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}');
+                      },
+                    ),
+                    StreamBuilder<Duration>(
+                      stream: _audioPlayer.positionStream,
+                      builder: (context, snapshot) {
+                        final position = snapshot.data ?? Duration.zero;
+                        return Text(
+                            'Progreso: ${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}');
+                      },
+                    ),
+                  ],
                 ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -180,6 +228,51 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   ],
                 ),
                 SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton(
+                      onPressed: _currentIndex > 0
+                          ? () {
+                              setState(() {
+                                _currentIndex--;
+                              });
+                              _playAudio();
+                            }
+                          : null,
+                      child: Text('Anterior'),
+                    ),
+                    SizedBox(width: 20),
+                    ElevatedButton(
+                      onPressed: _currentIndex < _playlist.length - 1
+                          ? () {
+                              setState(() {
+                                _currentIndex++;
+                              });
+                              _playAudio();
+                            }
+                          : null,
+                      child: Text('Siguiente'),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text('Volumen'),
+                    Slider(
+                      value: _audioPlayer.volume,
+                      onChanged: (value) {
+                        setState(() {
+                          _audioPlayer.setVolume(value);
+                        });
+                      },
+                      min: 0.0,
+                      max: 1.0,
+                    ),
+                  ],
+                ),
               ],
             ),
     );

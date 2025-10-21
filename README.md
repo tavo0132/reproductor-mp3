@@ -1,16 +1,10 @@
-# reproductor_mp3
+# Reproductor MP3 en Flutter
 
-A new Flutter project.
+Este proyecto es una aplicación Flutter para reproducir archivos de música en formato MP3. Permite gestionar una lista de reproducción, realizar transiciones automáticas entre canciones con efectos de fade-in y fade-out, y cuenta con una interfaz visual inspirada en turntables.
 
-## Getting Started
+## Características
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Reproducción de archivos MP3 locales
+- Lista de reproducción personalizable
+- Transiciones automáticas con fade-in/fade-out entre canciones
+- Interfaz visual moderna y controles intuitivos

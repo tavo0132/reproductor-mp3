@@ -113,35 +113,159 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       appBar: AppBar(
         title: Text('Reproductor MP3'),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (_playlist.isEmpty)
-              Text('No se encontraron canciones en Music/Cristiana'),
-            if (_playlist.isNotEmpty)
-              Text('Canción actual: ' +
-                  _playlist[_currentIndex].split('/').last),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isPlaying || _playlist.isEmpty ? null : _playAudio,
-              child: Text('Reproducir canción'),
+      body: _playlist.isEmpty
+          ? Center(
+              child: Text('No se encontraron canciones en Music/Cristiana'))
+          : Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    TurntableWidget(
+                        isPlaying: _isPlaying, label: 'turntable_1'),
+                    TurntableWidget(
+                        isPlaying: _isPlaying, label: 'turntable_2'),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text(
+                    'Lista de reproducción',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _playlist.length,
+                    itemBuilder: (context, index) {
+                      final isCurrent = index == _currentIndex;
+                      return ListTile(
+                        leading: Icon(
+                          isCurrent ? Icons.play_arrow : Icons.music_note,
+                          color: isCurrent ? Colors.blue : null,
+                        ),
+                        title: Text(_playlist[index].split('/').last),
+                        selected: isCurrent,
+                        onTap: () async {
+                          setState(() {
+                            _currentIndex = index;
+                          });
+                          await _playAudio();
+                        },
+                      );
+                    },
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton(
+                      onPressed:
+                          _isPlaying || _playlist.isEmpty ? null : _playAudio,
+                      child: Text('Reproducir'),
+                    ),
+                    SizedBox(width: 20),
+                    ElevatedButton(
+                      onPressed: _isPlaying ? _stopAudio : null,
+                      child: Text('Detener'),
+                    ),
+                    SizedBox(width: 20),
+                    ElevatedButton(
+                      onPressed:
+                          _currentIndex < _playlist.length - 1 && _isPlaying
+                              ? _playNextWithFade
+                              : null,
+                      child: Text('Siguiente'),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 16),
+              ],
             ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isPlaying ? _stopAudio : null,
-              child: Text('Detener canción'),
+    );
+  }
+}
+
+class TurntableWidget extends StatefulWidget {
+  final bool isPlaying;
+  final String label;
+  const TurntableWidget(
+      {Key? key, required this.isPlaying, required this.label})
+      : super(key: key);
+
+  @override
+  State<TurntableWidget> createState() => _TurntableWidgetState();
+}
+
+class _TurntableWidgetState extends State<TurntableWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: 4),
+    );
+    if (widget.isPlaying) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(TurntableWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isPlaying && !_controller.isAnimating) {
+      _controller.repeat();
+    } else if (!widget.isPlaying && _controller.isAnimating) {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SizedBox(
+          width: 100,
+          height: 100,
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) {
+              return Transform.rotate(
+                angle: _controller.value * 2 * 3.1416,
+                child: child,
+              );
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.grey[300],
+                border: Border.all(color: Colors.black, width: 4),
+              ),
+              child: Center(
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
             ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _currentIndex < _playlist.length - 1 && _isPlaying
-                  ? _playNextWithFade
-                  : null,
-              child: Text('Siguiente canción'),
-            ),
-          ],
+          ),
         ),
-      ),
+        SizedBox(height: 8),
+        Text(widget.label, style: TextStyle(fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }

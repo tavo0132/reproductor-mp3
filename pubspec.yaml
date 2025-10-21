@@ -1,0 +1,24 @@
+name: reproductor_mp3
+
+description: Un reproductor de música en Flutter con soporte para transiciones y turntables visuales.
+
+version: 1.0.0+1
+environment:
+  sdk: ">=2.17.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  just_audio: ^0.9.30
+  permission_handler: ^11.3.0
+  path_provider: ^2.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/audio/sample.mp3

@@ -450,21 +450,58 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   ),
                 ),
                 // Ecualizador decorativo (no funcional por ahora)
+                // Ecualizador de 7 bandas (solo UI, no funcional)
                 Container(
                   color: Colors.blueGrey[800],
-                  padding: EdgeInsets.symmetric(vertical: 8),
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: List.generate(10, (i) {
-                      return Container(
-                        width: 10,
-                        height: 40 + (i % 2 == 0 ? 10 : 0),
-                        decoration: BoxDecoration(
-                          color: Colors.blue[900],
-                          borderRadius: BorderRadius.circular(4),
+                    children: [
+                      for (var i = 0; i < 7; i++)
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              RotatedBox(
+                                quarterTurns: -1,
+                                child: SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    trackHeight: 4.0,
+                                    thumbShape: RoundSliderThumbShape(
+                                        enabledThumbRadius: 8.0),
+                                    overlayShape: RoundSliderOverlayShape(
+                                        overlayRadius: 14.0),
+                                    activeTrackColor: Colors.blueAccent,
+                                    inactiveTrackColor: Colors.blueGrey[600],
+                                    thumbColor: Colors.white,
+                                  ),
+                                  child: Slider(
+                                    value:
+                                        0.5, // Valor inicial fijo (a conectar después)
+                                    onChanged: (v) {}, // Sin funcionalidad aún
+                                    min: 0.0,
+                                    max: 1.0,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                [
+                                  "60Hz",
+                                  "150Hz",
+                                  "400Hz",
+                                  "1kHz",
+                                  "2.4kHz",
+                                  "6kHz",
+                                  "15kHz"
+                                ][i],
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 12),
+                              ),
+                            ],
+                          ),
                         ),
-                      );
-                    }),
+                    ],
                   ),
                 ),
                 // Lista de reproducción

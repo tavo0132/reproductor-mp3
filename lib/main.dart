@@ -1,3 +1,4 @@
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -45,17 +46,34 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   Future<void> _loadMusicFromDevice() async {
-    // Solicitar permisos de almacenamiento
+    // Solicitar permisos de almacenamiento según versión de Android
     if (Platform.isAndroid) {
-      if (await Permission.manageExternalStorage.isGranted == false) {
-        var status = await Permission.manageExternalStorage.request();
-        if (!status.isGranted) {
-          // Si el permiso no se concede, abrir la configuración
-          await openAppSettings();
-          setState(() {
-            _playlist = [];
-          });
-          return;
+      final deviceInfo = DeviceInfoPlugin();
+      final androidInfo = await deviceInfo.androidInfo;
+      final sdkInt = androidInfo.version.sdkInt;
+      if (sdkInt >= 30) {
+        // Android 11 o superior
+        if (await Permission.manageExternalStorage.isGranted == false) {
+          var status = await Permission.manageExternalStorage.request();
+          if (!status.isGranted) {
+            await openAppSettings();
+            setState(() {
+              _playlist = [];
+            });
+            return;
+          }
+        }
+      } else {
+        // Android 10 o menor
+        if (await Permission.storage.isGranted == false) {
+          var status = await Permission.storage.request();
+          if (!status.isGranted) {
+            await openAppSettings();
+            setState(() {
+              _playlist = [];
+            });
+            return;
+          }
         }
       }
     }
@@ -67,10 +85,15 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
           .where((f) => f.path.endsWith('.mp3'))
           .map((f) => f.path)
           .toList();
+      print('Archivos encontrados en /storage/emulated/0/Music/Cristiana:');
+      for (var f in files) {
+        print(f);
+      }
       setState(() {
         _playlist = files;
       });
     } else {
+      print('La carpeta /storage/emulated/0/Music/Cristiana no existe');
       setState(() {
         _playlist = [];
       });
@@ -110,37 +133,176 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text('Reproductor MP3'),
+        backgroundColor: Colors.blue[900],
+        title: Text('Reproductor MP3', style: TextStyle(color: Colors.white)),
+        elevation: 0,
       ),
       body: _playlist.isEmpty
           ? Center(
-              child: Text('No se encontraron canciones en Music/Cristiana'))
+              child: Text('No se encontraron canciones en Music/Cristiana',
+                  style: TextStyle(color: Colors.white70)))
           : Column(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    TurntableWidget(
-                        isPlaying: _isPlaying, label: 'turntable_1'),
-                    TurntableWidget(
-                        isPlaying: _isPlaying, label: 'turntable_2'),
-                  ],
+                // Panel superior: información de la canción
+                Container(
+                  color: Colors.blueGrey[900],
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.music_note, color: Colors.white),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _playlist.isNotEmpty
+                              ? _playlist[_currentIndex].split('/').last
+                              : 'N/A',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      StreamBuilder<Duration?>(
+                        stream: _audioPlayer.durationStream,
+                        builder: (context, snapshot) {
+                          final duration = snapshot.data ?? Duration.zero;
+                          return Text(
+                            '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                            style: TextStyle(color: Colors.white70),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
+                // Barra de progreso
+                StreamBuilder<Duration>(
+                  stream: _audioPlayer.positionStream,
+                  builder: (context, snapshot) {
+                    final position = snapshot.data ?? Duration.zero;
+                    return LinearProgressIndicator(
+                      value: (_audioPlayer.duration != null &&
+                              _audioPlayer.duration!.inMilliseconds > 0)
+                          ? position.inMilliseconds /
+                              _audioPlayer.duration!.inMilliseconds
+                          : 0.0,
+                      backgroundColor: Colors.blueGrey[800],
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                      minHeight: 6,
+                    );
+                  },
+                ),
+                // Panel de controles
+                Container(
+                  color: Colors.blueGrey[900],
+                  padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: Icon(Icons.skip_previous, color: Colors.white),
+                        iconSize: 32,
+                        onPressed: _currentIndex > 0
+                            ? () {
+                                setState(() {
+                                  _currentIndex--;
+                                });
+                                _playAudio();
+                              }
+                            : null,
+                      ),
+                      IconButton(
+                        icon: Icon(
+                            _isPlaying ? Icons.pause_circle : Icons.play_circle,
+                            color: Colors.white),
+                        iconSize: 48,
+                        onPressed: _playlist.isEmpty
+                            ? null
+                            : () {
+                                if (_isPlaying) {
+                                  _audioPlayer.pause();
+                                  setState(() => _isPlaying = false);
+                                } else {
+                                  _audioPlayer.play();
+                                  setState(() => _isPlaying = true);
+                                }
+                              },
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.stop_circle, color: Colors.white),
+                        iconSize: 40,
+                        onPressed: _isPlaying ? _stopAudio : null,
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.skip_next, color: Colors.white),
+                        iconSize: 32,
+                        onPressed: _currentIndex < _playlist.length - 1
+                            ? () {
+                                setState(() {
+                                  _currentIndex++;
+                                });
+                                _playAudio();
+                              }
+                            : null,
+                      ),
+                      SizedBox(width: 16),
+                      Icon(Icons.volume_up, color: Colors.white),
+                      SizedBox(
+                        width: 100,
+                        child: Slider(
+                          value: _audioPlayer.volume,
+                          onChanged: (value) {
+                            setState(() {
+                              _audioPlayer.setVolume(value);
+                            });
+                          },
+                          min: 0.0,
+                          max: 1.0,
+                          activeColor: Colors.blueAccent,
+                          inactiveColor: Colors.blueGrey[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Ecualizador decorativo (no funcional por ahora)
+                Container(
+                  color: Colors.blueGrey[800],
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: List.generate(10, (i) {
+                      return Container(
+                        width: 10,
+                        height: 40 + (i % 2 == 0 ? 10 : 0),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[900],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+                // Lista de reproducción
                 Padding(
-                  padding: const EdgeInsets.all(8.0),
+                  padding: const EdgeInsets.symmetric(vertical: 8.0),
                   child: Text(
                     'Lista de reproducción',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white),
                   ),
                 ),
                 Expanded(
                   child: ReorderableListView(
                     onReorder: (oldIndex, newIndex) {
                       setState(() {
-                        if (newIndex > oldIndex) {
-                          newIndex -= 1;
-                        }
+                        if (newIndex > oldIndex) newIndex -= 1;
                         final item = _playlist.removeAt(oldIndex);
                         _playlist.insert(newIndex, item);
                         if (_currentIndex == oldIndex) {
@@ -162,10 +324,14 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                             index == _currentIndex
                                 ? Icons.play_arrow
                                 : Icons.music_note,
-                            color: index == _currentIndex ? Colors.blue : null,
+                            color: index == _currentIndex
+                                ? Colors.blueAccent
+                                : Colors.white70,
                           ),
-                          title: Text(_playlist[index].split('/').last),
+                          title: Text(_playlist[index].split('/').last,
+                              style: TextStyle(color: Colors.white)),
                           selected: index == _currentIndex,
+                          selectedTileColor: Colors.blueGrey[700],
                           onTap: () async {
                             setState(() {
                               _currentIndex = index;
@@ -176,102 +342,13 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                     ],
                   ),
                 ),
-                Column(
-                  children: [
-                    Text(
-                      'Canción actual: ' +
-                          (_playlist.isNotEmpty
-                              ? _playlist[_currentIndex].split('/').last
-                              : 'N/A'),
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    StreamBuilder<Duration?>(
-                      stream: _audioPlayer.durationStream,
-                      builder: (context, snapshot) {
-                        final duration = snapshot.data ?? Duration.zero;
-                        return Text(
-                            'Duración: ${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}');
-                      },
-                    ),
-                    StreamBuilder<Duration>(
-                      stream: _audioPlayer.positionStream,
-                      builder: (context, snapshot) {
-                        final position = snapshot.data ?? Duration.zero;
-                        return Text(
-                            'Progreso: ${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}');
-                      },
-                    ),
-                  ],
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ElevatedButton(
-                      onPressed:
-                          _isPlaying || _playlist.isEmpty ? null : _playAudio,
-                      child: Text('Reproducir'),
-                    ),
-                    SizedBox(width: 20),
-                    ElevatedButton(
-                      onPressed: _isPlaying ? _stopAudio : null,
-                      child: Text('Detener'),
-                    ),
-                    SizedBox(width: 20),
-                    ElevatedButton(
-                      onPressed:
-                          _currentIndex < _playlist.length - 1 && _isPlaying
-                              ? _playNextWithFade
-                              : null,
-                      child: Text('Siguiente'),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ElevatedButton(
-                      onPressed: _currentIndex > 0
-                          ? () {
-                              setState(() {
-                                _currentIndex--;
-                              });
-                              _playAudio();
-                            }
-                          : null,
-                      child: Text('Anterior'),
-                    ),
-                    SizedBox(width: 20),
-                    ElevatedButton(
-                      onPressed: _currentIndex < _playlist.length - 1
-                          ? () {
-                              setState(() {
-                                _currentIndex++;
-                              });
-                              _playAudio();
-                            }
-                          : null,
-                      child: Text('Siguiente'),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text('Volumen'),
-                    Slider(
-                      value: _audioPlayer.volume,
-                      onChanged: (value) {
-                        setState(() {
-                          _audioPlayer.setVolume(value);
-                        });
-                      },
-                      min: 0.0,
-                      max: 1.0,
-                    ),
-                  ],
+                // Espacio para banner de publicidad
+                Container(
+                  height: 60,
+                  color: Colors.white,
+                  alignment: Alignment.center,
+                  child: Text('Espacio para publicidad',
+                      style: TextStyle(color: Colors.black54)),
                 ),
               ],
             ),

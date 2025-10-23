@@ -626,6 +626,7 @@ class WinampEqualizer extends StatefulWidget {
 
 class _WinampEqualizerState extends State<WinampEqualizer> {
   List<double> _bandValues = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+  bool _isEnabled = false; // Estado del ecualizador (ON/OFF)
 
   // Frecuencias para las 7 bandas (típicas en ecualizadores)
   final List<String> _frequencies = [
@@ -685,10 +686,42 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
                   fontSize: 16,
                 ),
               ),
-              IconButton(
-                icon: Icon(Icons.refresh, color: Colors.white),
-                onPressed: _resetEqualizer,
-                tooltip: 'Resetear ecualizador',
+              Row(
+                children: [
+                  // Botón ON/OFF
+                  Container(
+                    decoration: BoxDecoration(
+                      color: _isEnabled ? Colors.green[700] : Colors.red[700],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: IconButton(
+                      icon: Icon(
+                        _isEnabled ? Icons.power_settings_new : Icons.power_off,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _isEnabled = !_isEnabled;
+                        });
+                        // Notificar cambio de estado
+                        if (widget.onBandValuesChanged != null) {
+                          widget.onBandValuesChanged!(
+                              _isEnabled ? _bandValues : List.filled(7, 0.0));
+                        }
+                      },
+                      tooltip: _isEnabled
+                          ? 'Apagar ecualizador'
+                          : 'Encender ecualizador',
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  // Botón Reset
+                  IconButton(
+                    icon: Icon(Icons.refresh, color: Colors.white),
+                    onPressed: _resetEqualizer,
+                    tooltip: 'Resetear ecualizador',
+                  ),
+                ],
               ),
             ],
           ),
@@ -751,8 +784,12 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
               min: -12.0,
               max: 12.0,
               divisions: 48,
-              onChanged: (value) => _onBandValueChanged(bandIndex, value),
-              activeColor: _getSliderColor(_bandValues[bandIndex]),
+              onChanged: _isEnabled
+                  ? (value) => _onBandValueChanged(bandIndex, value)
+                  : null,
+              activeColor: _isEnabled
+                  ? _getSliderColor(_bandValues[bandIndex])
+                  : Colors.grey,
               inactiveColor: Colors.grey[600],
             ),
           ),
@@ -788,14 +825,15 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
 
   Widget _buildPresetButton(String name, List<double> values) {
     return ElevatedButton(
-      onPressed: () => _applyPreset(values),
+      onPressed: _isEnabled ? () => _applyPreset(values) : null,
       style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.grey[800],
+        backgroundColor: _isEnabled ? Colors.grey[800] : Colors.grey[900],
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       ),
       child: Text(
         name,
-        style: TextStyle(fontSize: 12, color: Colors.white),
+        style: TextStyle(
+            fontSize: 12, color: _isEnabled ? Colors.white : Colors.grey[600]),
       ),
     );
   }

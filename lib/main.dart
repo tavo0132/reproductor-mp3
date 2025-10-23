@@ -449,61 +449,16 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                     ],
                   ),
                 ),
-                // Ecualizador decorativo (no funcional por ahora)
-                // Ecualizador de 7 bandas (solo UI, no funcional)
-                Container(
-                  color: Colors.blueGrey[800],
-                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      for (var i = 0; i < 7; i++)
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              RotatedBox(
-                                quarterTurns: -1,
-                                child: SliderTheme(
-                                  data: SliderTheme.of(context).copyWith(
-                                    trackHeight: 4.0,
-                                    thumbShape: RoundSliderThumbShape(
-                                        enabledThumbRadius: 8.0),
-                                    overlayShape: RoundSliderOverlayShape(
-                                        overlayRadius: 14.0),
-                                    activeTrackColor: Colors.blueAccent,
-                                    inactiveTrackColor: Colors.blueGrey[600],
-                                    thumbColor: Colors.white,
-                                  ),
-                                  child: Slider(
-                                    value:
-                                        0.5, // Valor inicial fijo (a conectar después)
-                                    onChanged: (v) {}, // Sin funcionalidad aún
-                                    min: 0.0,
-                                    max: 1.0,
-                                  ),
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                [
-                                  "60Hz",
-                                  "150Hz",
-                                  "400Hz",
-                                  "1kHz",
-                                  "2.4kHz",
-                                  "6kHz",
-                                  "15kHz"
-                                ][i],
-                                style: TextStyle(
-                                    color: Colors.white, fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
+                // Ecualizador funcional de 7 bandas tipo Winamp
+                SizedBox(height: 12),
+                WinampEqualizer(
+                  onBandValuesChanged: (values) {
+                    // Aquí puedes guardar los valores del ecualizador
+                    // y aplicarlos al audio cuando sea posible
+                    print('Valores del ecualizador: $values');
+                  },
                 ),
+                SizedBox(height: 12),
                 // Lista de reproducción
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -656,5 +611,202 @@ class _TurntableWidgetState extends State<TurntableWidget>
         Text(widget.label, style: TextStyle(fontWeight: FontWeight.bold)),
       ],
     );
+  }
+}
+
+// Widget del Ecualizador tipo Winamp
+class WinampEqualizer extends StatefulWidget {
+  final Function(List<double>)? onBandValuesChanged;
+
+  const WinampEqualizer({Key? key, this.onBandValuesChanged}) : super(key: key);
+
+  @override
+  _WinampEqualizerState createState() => _WinampEqualizerState();
+}
+
+class _WinampEqualizerState extends State<WinampEqualizer> {
+  List<double> _bandValues = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+  // Frecuencias para las 7 bandas (típicas en ecualizadores)
+  final List<String> _frequencies = [
+    '60Hz',
+    '150Hz',
+    '400Hz',
+    '1kHz',
+    '2.4kHz',
+    '6kHz',
+    '15kHz'
+  ];
+
+  void _onBandValueChanged(int bandIndex, double value) {
+    setState(() {
+      _bandValues[bandIndex] = value;
+    });
+
+    // Notificar cambios al padre si se proporciona callback
+    if (widget.onBandValuesChanged != null) {
+      widget.onBandValuesChanged!(_bandValues);
+    }
+  }
+
+  void _resetEqualizer() {
+    for (int i = 0; i < 7; i++) {
+      _onBandValueChanged(i, 0.0);
+    }
+  }
+
+  void _applyPreset(List<double> values) {
+    for (int i = 0; i < 7; i++) {
+      _onBandValueChanged(i, values[i]);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[700]!),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header del ecualizador
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'ECUALIZADOR - 7 BANDAS',
+                style: TextStyle(
+                  color: Colors.greenAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.refresh, color: Colors.white),
+                onPressed: _resetEqualizer,
+                tooltip: 'Resetear ecualizador',
+              ),
+            ],
+          ),
+
+          SizedBox(height: 20),
+
+          // Sliders del ecualizador
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(7, (index) => _buildBandSlider(index)),
+          ),
+
+          SizedBox(height: 10),
+
+          // Preajustes rápidos
+          _buildPresetButtons(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBandSlider(int bandIndex) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Valor numérico
+        Container(
+          width: 40,
+          height: 20,
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Center(
+            child: Text(
+              '${_bandValues[bandIndex].toStringAsFixed(1)}dB',
+              style: TextStyle(
+                color: Colors.greenAccent,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+
+        SizedBox(height: 8),
+
+        // Slider vertical
+        Container(
+          width: 40,
+          height: 120,
+          decoration: BoxDecoration(
+            color: Colors.grey[800],
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: RotatedBox(
+            quarterTurns: 3,
+            child: Slider(
+              value: _bandValues[bandIndex],
+              min: -12.0,
+              max: 12.0,
+              divisions: 48,
+              onChanged: (value) => _onBandValueChanged(bandIndex, value),
+              activeColor: _getSliderColor(_bandValues[bandIndex]),
+              inactiveColor: Colors.grey[600],
+            ),
+          ),
+        ),
+
+        SizedBox(height: 8),
+
+        // Etiqueta de frecuencia
+        Text(
+          _frequencies[bandIndex],
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPresetButtons() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        _buildPresetButton('Flat', [0, 0, 0, 0, 0, 0, 0]),
+        _buildPresetButton('Rock', [4, 3, 0, 2, 3, 4, 2]),
+        _buildPresetButton('Pop', [2, 1, 0, 2, 3, 2, 1]),
+        _buildPresetButton('Jazz', [3, 2, 0, 1, 2, 3, 4]),
+        _buildPresetButton('Classic', [4, 2, 0, -1, 0, 2, 3]),
+      ],
+    );
+  }
+
+  Widget _buildPresetButton(String name, List<double> values) {
+    return ElevatedButton(
+      onPressed: () => _applyPreset(values),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.grey[800],
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      ),
+      child: Text(
+        name,
+        style: TextStyle(fontSize: 12, color: Colors.white),
+      ),
+    );
+  }
+
+  Color _getSliderColor(double value) {
+    if (value > 0) {
+      return Colors.greenAccent;
+    } else if (value < 0) {
+      return Colors.redAccent;
+    } else {
+      return Colors.blueAccent;
+    }
   }
 }

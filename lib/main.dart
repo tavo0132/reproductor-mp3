@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 
 void main() {
   runApp(MyApp());
@@ -32,6 +31,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   List<String> _playlist = [];
   int _currentIndex = 0;
   bool _isPlaying = false;
+  bool _isRandom = false;
+  bool _fadeEnabled = false;
+  bool _isMuted = false;
+  double _lastVolume = 1.0;
 
   @override
   void initState() {
@@ -121,13 +124,46 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   Future<void> _playNextWithFade() async {
-    // Aquí se implementará el fade-out y fade-in en el siguiente paso
-    if (_currentIndex < _playlist.length - 1) {
-      setState(() => _currentIndex++);
-      await _playAudio();
-    } else {
-      setState(() => _isPlaying = false);
+    if (_playlist.isEmpty) return;
+    if (_fadeEnabled) {
+      // Fade-out
+      for (double v = _audioPlayer.volume; v > 0.0; v -= 0.1) {
+        await _audioPlayer.setVolume(v);
+        await Future.delayed(Duration(milliseconds: 50));
+      }
     }
+    int nextIndex;
+    if (_isRandom) {
+      final random = List<int>.generate(_playlist.length, (i) => i)
+        ..remove(_currentIndex);
+      if (random.isEmpty) {
+        setState(() => _isPlaying = false);
+        return;
+      }
+      random.shuffle();
+      nextIndex = random.first;
+    } else {
+      if (_currentIndex < _playlist.length - 1) {
+        nextIndex = _currentIndex + 1;
+      } else {
+        setState(() => _isPlaying = false);
+        return;
+      }
+    }
+    setState(() => _currentIndex = nextIndex);
+    await _audioPlayer.setFilePath(_playlist[_currentIndex]);
+    if (_fadeEnabled) {
+      // Fade-in
+      await _audioPlayer.setVolume(0.0);
+      _audioPlayer.play();
+      for (double v = 0.0; v <= 1.0; v += 0.1) {
+        await _audioPlayer.setVolume(v);
+        await Future.delayed(Duration(milliseconds: 50));
+      }
+    } else {
+      _audioPlayer.play();
+    }
+    setState(() => _isPlaying = true);
   }
 
   @override
@@ -200,71 +236,215 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 Container(
                   color: Colors.blueGrey[900],
                   padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  child: Column(
                     children: [
-                      IconButton(
-                        icon: Icon(Icons.skip_previous, color: Colors.white),
-                        iconSize: 32,
-                        onPressed: _currentIndex > 0
-                            ? () {
-                                setState(() {
-                                  _currentIndex--;
-                                });
-                                _playAudio();
-                              }
-                            : null,
+                      Column(
+                        children: [
+                          // Fila de controles principales
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Botón Anterior - Tamaño: 32px
+                              IconButton(
+                                icon: Icon(Icons.skip_previous,
+                                    color: Colors.white),
+                                iconSize: 32,
+                                onPressed: _currentIndex > 0
+                                    ? () {
+                                        setState(() {
+                                          _currentIndex--;
+                                        });
+                                        _playAudio();
+                                      }
+                                    : null,
+                              ),
+                              // Separación uniforme entre botones principales (ajustar aquí)
+                              SizedBox(
+                                  width:
+                                      12), // <-- Separación entre botones principales
+                              // Botón Play/Pausa - Tamaño: 48px
+                              IconButton(
+                                icon: Icon(
+                                    _isPlaying
+                                        ? Icons.pause_circle
+                                        : Icons.play_circle,
+                                    color: Colors.white),
+                                iconSize: 48,
+                                onPressed: _playlist.isEmpty
+                                    ? null
+                                    : () {
+                                        if (_isPlaying) {
+                                          _audioPlayer.pause();
+                                          setState(() => _isPlaying = false);
+                                        } else {
+                                          _audioPlayer.play();
+                                          setState(() => _isPlaying = true);
+                                        }
+                                      },
+                              ),
+                              SizedBox(
+                                  width:
+                                      12), // <-- Separación entre botones principales
+                              // Botón Stop - Tamaño: 40px
+                              IconButton(
+                                icon: Icon(Icons.stop_circle,
+                                    color: Colors.white),
+                                iconSize: 40,
+                                onPressed: _isPlaying ? _stopAudio : null,
+                              ),
+                              SizedBox(
+                                  width:
+                                      12), // <-- Separación entre botones principales
+                              // Botón Siguiente - Tamaño: 32px
+                              IconButton(
+                                icon:
+                                    Icon(Icons.skip_next, color: Colors.white),
+                                iconSize: 32,
+                                onPressed: _playlist.length > 1
+                                    ? () async {
+                                        if (_isRandom) {
+                                          final random = List<int>.generate(
+                                              _playlist.length, (i) => i)
+                                            ..remove(_currentIndex);
+                                          random.shuffle();
+                                          setState(() {
+                                            _currentIndex = random.first;
+                                          });
+                                          await _audioPlayer.setFilePath(
+                                              _playlist[_currentIndex]);
+                                          _audioPlayer.play();
+                                          setState(() => _isPlaying = true);
+                                        } else if (_currentIndex <
+                                            _playlist.length - 1) {
+                                          setState(() {
+                                            _currentIndex++;
+                                          });
+                                          _playAudio();
+                                        }
+                                      }
+                                    : null,
+                              ),
+                              SizedBox(
+                                  width:
+                                      12), // <-- Separación entre botones principales
+                              // Botón Mute - Tamaño: 32px
+                              IconButton(
+                                icon: Icon(
+                                  _isMuted ? Icons.volume_off : Icons.volume_up,
+                                  color: _isMuted
+                                      ? Colors.redAccent
+                                      : Colors.white,
+                                ),
+                                iconSize: 32,
+                                onPressed: () {
+                                  setState(() {
+                                    if (_isMuted) {
+                                      _audioPlayer.setVolume(_lastVolume);
+                                      _isMuted = false;
+                                    } else {
+                                      _lastVolume = _audioPlayer.volume;
+                                      _audioPlayer.setVolume(0.0);
+                                      _isMuted = true;
+                                    }
+                                  });
+                                },
+                              ),
+                              SizedBox(
+                                  width:
+                                      12), // <-- Separación entre botones principales
+                              // Slider Volumen - Ancho: 70px
+                              Container(
+                                width: 70,
+                                child: SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    trackHeight: 3.0,
+                                    thumbShape: RoundSliderThumbShape(
+                                        enabledThumbRadius: 6.0),
+                                    overlayShape: RoundSliderOverlayShape(
+                                        overlayRadius: 12.0),
+                                  ),
+                                  child: Slider(
+                                    value: _audioPlayer.volume,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        _audioPlayer.setVolume(value);
+                                        if (value == 0.0) {
+                                          _isMuted = true;
+                                        } else {
+                                          _isMuted = false;
+                                          _lastVolume = value;
+                                        }
+                                      });
+                                    },
+                                    min: 0.0,
+                                    max: 1.0,
+                                    activeColor: Colors.blueAccent,
+                                    inactiveColor: Colors.blueGrey[700],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-                      IconButton(
-                        icon: Icon(
-                            _isPlaying ? Icons.pause_circle : Icons.play_circle,
-                            color: Colors.white),
-                        iconSize: 48,
-                        onPressed: _playlist.isEmpty
-                            ? null
-                            : () {
-                                if (_isPlaying) {
-                                  _audioPlayer.pause();
-                                  setState(() => _isPlaying = false);
-                                } else {
-                                  _audioPlayer.play();
-                                  setState(() => _isPlaying = true);
-                                }
-                              },
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.stop_circle, color: Colors.white),
-                        iconSize: 40,
-                        onPressed: _isPlaying ? _stopAudio : null,
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.skip_next, color: Colors.white),
-                        iconSize: 32,
-                        onPressed: _currentIndex < _playlist.length - 1
-                            ? () {
-                                setState(() {
-                                  _currentIndex++;
-                                });
-                                _playAudio();
-                              }
-                            : null,
-                      ),
-                      SizedBox(width: 16),
-                      Icon(Icons.volume_up, color: Colors.white),
-                      SizedBox(
-                        width: 100,
-                        child: Slider(
-                          value: _audioPlayer.volume,
-                          onChanged: (value) {
-                            setState(() {
-                              _audioPlayer.setVolume(value);
-                            });
-                          },
-                          min: 0.0,
-                          max: 1.0,
-                          activeColor: Colors.blueAccent,
-                          inactiveColor: Colors.blueGrey[700],
-                        ),
+                      SizedBox(height: 8),
+                      // Fila de botones secundarios
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Botón Secuencial
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: !_isRandom
+                                  ? Colors.blueAccent
+                                  : Colors.blueGrey[700],
+                            ),
+                            icon: Icon(Icons.format_list_numbered,
+                                color: Colors.white),
+                            label: Text('Secuencial',
+                                style: TextStyle(color: Colors.white)),
+                            onPressed: () {
+                              setState(() {
+                                _isRandom = false;
+                              });
+                            },
+                          ),
+                          SizedBox(width: 8),
+                          // Botón Aleatorio
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _isRandom
+                                  ? Colors.blueAccent
+                                  : Colors.blueGrey[700],
+                            ),
+                            icon: Icon(Icons.shuffle, color: Colors.white),
+                            label: Text('Aleatorio',
+                                style: TextStyle(color: Colors.white)),
+                            onPressed: () {
+                              setState(() {
+                                _isRandom = true;
+                              });
+                            },
+                          ),
+                          SizedBox(width: 8),
+                          // Botón Fade
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _fadeEnabled
+                                  ? Colors.blueAccent
+                                  : Colors.blueGrey[700],
+                            ),
+                            icon: Icon(Icons.blur_on, color: Colors.white),
+                            label: Text('Fade',
+                                style: TextStyle(color: Colors.white)),
+                            onPressed: () {
+                              setState(() {
+                                _fadeEnabled = !_fadeEnabled;
+                              });
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -318,26 +498,28 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                     },
                     children: [
                       for (int index = 0; index < _playlist.length; index++)
-                        ListTile(
+                        GestureDetector(
                           key: ValueKey(_playlist[index]),
-                          leading: Icon(
-                            index == _currentIndex
-                                ? Icons.play_arrow
-                                : Icons.music_note,
-                            color: index == _currentIndex
-                                ? Colors.blueAccent
-                                : Colors.white70,
-                          ),
-                          title: Text(_playlist[index].split('/').last,
-                              style: TextStyle(color: Colors.white)),
-                          selected: index == _currentIndex,
-                          selectedTileColor: Colors.blueGrey[700],
-                          onTap: () async {
+                          onDoubleTap: () async {
                             setState(() {
                               _currentIndex = index;
                             });
                             await _playAudio();
                           },
+                          child: ListTile(
+                            leading: Icon(
+                              index == _currentIndex
+                                  ? Icons.play_arrow
+                                  : Icons.music_note,
+                              color: index == _currentIndex
+                                  ? Colors.blueAccent
+                                  : Colors.white70,
+                            ),
+                            title: Text(_playlist[index].split('/').last,
+                                style: TextStyle(color: Colors.white)),
+                            selected: index == _currentIndex,
+                            selectedTileColor: Colors.blueGrey[700],
+                          ),
                         ),
                     ],
                   ),

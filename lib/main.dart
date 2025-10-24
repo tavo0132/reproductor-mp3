@@ -1,11 +1,91 @@
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 
 void main() {
   runApp(MyApp());
+}
+
+// Clase para comunicación con el ecualizador nativo
+class EqualizerChannel {
+  static const platform =
+      MethodChannel('com.example.reproductor_mp3/equalizer');
+
+  static Future<int?> getAudioSessionId() async {
+    try {
+      final sessionId = await platform.invokeMethod('getAudioSessionId');
+      return sessionId as int?;
+    } catch (e) {
+      print('Error al obtener audioSessionId: $e');
+      return null;
+    }
+  }
+
+  static Future<void> initializeEqualizer(int audioSessionId) async {
+    try {
+      await platform.invokeMethod('initializeEqualizer', {
+        'audioSessionId': audioSessionId,
+      });
+      print('Ecualizador inicializado con sessionId: $audioSessionId');
+    } catch (e) {
+      print('Error al inicializar ecualizador: $e');
+    }
+  }
+
+  static Future<void> setEqualizerEnabled(bool enabled) async {
+    try {
+      await platform.invokeMethod('setEqualizerEnabled', {
+        'enabled': enabled,
+      });
+      print('Ecualizador ${enabled ? "activado" : "desactivado"}');
+    } catch (e) {
+      print('Error al cambiar estado del ecualizador: $e');
+    }
+  }
+
+  static Future<void> setBandLevel(int bandIndex, double level) async {
+    try {
+      await platform.invokeMethod('setBandLevel', {
+        'bandIndex': bandIndex,
+        'level': level,
+      });
+    } catch (e) {
+      print('Error al establecer nivel de banda: $e');
+    }
+  }
+
+  static Future<void> resetBands() async {
+    try {
+      await platform.invokeMethod('resetBands');
+      print('Bandas reseteadas');
+    } catch (e) {
+      print('Error al resetear bandas: $e');
+    }
+  }
+
+  static Future<void> applyPreset(List<double> values) async {
+    try {
+      await platform.invokeMethod('applyPreset', {
+        'values': values,
+      });
+      print('Preajuste aplicado: $values');
+    } catch (e) {
+      print('Error al aplicar preajuste: $e');
+    }
+  }
+
+  static Future<Map<dynamic, dynamic>?> getEqualizerInfo() async {
+    try {
+      final info = await platform.invokeMethod('getEqualizerInfo');
+      return info;
+    } catch (e) {
+      print('Error al obtener info del ecualizador: $e');
+      return null;
+    }
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -35,17 +115,65 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   bool _fadeEnabled = false;
   bool _isMuted = false;
   double _lastVolume = 1.0;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
 
   @override
   void initState() {
     super.initState();
     _audioPlayer = AudioPlayer();
-    _audioPlayer.playerStateStream.listen((state) {
-      if (state.processingState == ProcessingState.completed) {
-        _playNextWithFade();
-      }
+
+    // Configurar el contexto de audio para Android
+    if (Platform.isAndroid) {
+      _audioPlayer.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: false,
+            stayAwake: true,
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.media,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+        ),
+      );
+
+      // Inicializar el ecualizador inmediatamente con sessionId=0 (global)
+      _initializeEqualizer();
+    }
+
+    // Listener para cuando termina una canción
+    _audioPlayer.onPlayerComplete.listen((event) {
+      _playNextWithFade();
     });
+
+    // Listener para la duración
+    _audioPlayer.onDurationChanged.listen((Duration d) {
+      setState(() => _duration = d);
+    });
+
+    // Listener para la posición
+    _audioPlayer.onPositionChanged.listen((Duration p) {
+      setState(() => _position = p);
+    });
+
     _loadMusicFromDevice();
+  }
+
+  Future<void> _initializeEqualizer() async {
+    try {
+      // Inicializar con sessionId=0 para afectar toda la salida de audio
+      await EqualizerChannel.initializeEqualizer(0);
+
+      // Obtener y mostrar info del ecualizador
+      final info = await EqualizerChannel.getEqualizerInfo();
+      print('Info del ecualizador: $info');
+
+      // ACTIVAR el ecualizador inmediatamente
+      await EqualizerChannel.setEqualizerEnabled(true);
+      print('Ecualizador activado y listo');
+    } catch (e) {
+      print('Error al inicializar ecualizador: $e');
+    }
   }
 
   Future<void> _loadMusicFromDevice() async {
@@ -106,9 +234,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   Future<void> _playAudio() async {
     try {
       if (_playlist.isEmpty) return;
-      await _audioPlayer.setFilePath(_playlist[_currentIndex]);
+
+      await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
       setState(() => _isPlaying = true);
-      _audioPlayer.play();
     } catch (e) {
       print('Error al reproducir el audio: $e');
     }
@@ -127,7 +255,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     if (_playlist.isEmpty) return;
     if (_fadeEnabled) {
       // Fade-out
-      for (double v = _audioPlayer.volume; v > 0.0; v -= 0.1) {
+      for (double v = 1.0; v > 0.0; v -= 0.1) {
         await _audioPlayer.setVolume(v);
         await Future.delayed(Duration(milliseconds: 50));
       }
@@ -151,17 +279,17 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       }
     }
     setState(() => _currentIndex = nextIndex);
-    await _audioPlayer.setFilePath(_playlist[_currentIndex]);
+
     if (_fadeEnabled) {
       // Fade-in
       await _audioPlayer.setVolume(0.0);
-      _audioPlayer.play();
+      await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
       for (double v = 0.0; v <= 1.0; v += 0.1) {
         await _audioPlayer.setVolume(v);
         await Future.delayed(Duration(milliseconds: 50));
       }
     } else {
-      _audioPlayer.play();
+      await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
     }
     setState(() => _isPlaying = true);
   }
@@ -172,7 +300,8 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.blue[900],
-        title: Text('Reproductor MP3', style: TextStyle(color: Colors.white)),
+        title: Text('Reproductor MP3',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
         elevation: 0,
       ),
       body: _playlist.isEmpty
@@ -184,11 +313,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 // Panel superior: información de la canción
                 Container(
                   color: Colors.blueGrey[900],
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Row(
                     children: [
-                      Icon(Icons.music_note, color: Colors.white),
-                      SizedBox(width: 10),
+                      Icon(Icons.music_note, color: Colors.white, size: 18),
+                      SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           _playlist.isNotEmpty
@@ -197,45 +326,30 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                           style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
-                              fontSize: 16),
+                              fontSize: 13),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      StreamBuilder<Duration?>(
-                        stream: _audioPlayer.durationStream,
-                        builder: (context, snapshot) {
-                          final duration = snapshot.data ?? Duration.zero;
-                          return Text(
-                            '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                            style: TextStyle(color: Colors.white70),
-                          );
-                        },
+                      Text(
+                        '${_duration.inMinutes}:${(_duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],
                   ),
                 ),
                 // Barra de progreso
-                StreamBuilder<Duration>(
-                  stream: _audioPlayer.positionStream,
-                  builder: (context, snapshot) {
-                    final position = snapshot.data ?? Duration.zero;
-                    return LinearProgressIndicator(
-                      value: (_audioPlayer.duration != null &&
-                              _audioPlayer.duration!.inMilliseconds > 0)
-                          ? position.inMilliseconds /
-                              _audioPlayer.duration!.inMilliseconds
-                          : 0.0,
-                      backgroundColor: Colors.blueGrey[800],
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(Colors.blueAccent),
-                      minHeight: 6,
-                    );
-                  },
+                LinearProgressIndicator(
+                  value: (_duration.inMilliseconds > 0)
+                      ? _position.inMilliseconds / _duration.inMilliseconds
+                      : 0.0,
+                  backgroundColor: Colors.blueGrey[800],
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                  minHeight: 6,
                 ),
                 // Panel de controles
                 Container(
                   color: Colors.blueGrey[900],
-                  padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                   child: Column(
                     children: [
                       Column(
@@ -245,11 +359,13 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              // Botón Anterior - Tamaño: 32px
+                              // Botón Anterior - Tamaño: 24px
                               IconButton(
                                 icon: Icon(Icons.skip_previous,
                                     color: Colors.white),
-                                iconSize: 32,
+                                iconSize: 24,
+                                padding: EdgeInsets.all(2),
+                                constraints: BoxConstraints(),
                                 onPressed: _currentIndex > 0
                                     ? () {
                                         setState(() {
@@ -259,48 +375,47 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                       }
                                     : null,
                               ),
-                              // Separación uniforme entre botones principales (ajustar aquí)
-                              SizedBox(
-                                  width:
-                                      12), // <-- Separación entre botones principales
-                              // Botón Play/Pausa - Tamaño: 48px
+                              SizedBox(width: 2),
+                              // Botón Play/Pausa - Tamaño: 38px
                               IconButton(
                                 icon: Icon(
                                     _isPlaying
                                         ? Icons.pause_circle
                                         : Icons.play_circle,
                                     color: Colors.white),
-                                iconSize: 48,
+                                iconSize: 38,
+                                padding: EdgeInsets.all(2),
+                                constraints: BoxConstraints(),
                                 onPressed: _playlist.isEmpty
                                     ? null
-                                    : () {
+                                    : () async {
                                         if (_isPlaying) {
-                                          _audioPlayer.pause();
+                                          await _audioPlayer.pause();
                                           setState(() => _isPlaying = false);
                                         } else {
-                                          _audioPlayer.play();
+                                          await _audioPlayer.resume();
                                           setState(() => _isPlaying = true);
                                         }
                                       },
                               ),
-                              SizedBox(
-                                  width:
-                                      12), // <-- Separación entre botones principales
-                              // Botón Stop - Tamaño: 40px
+                              SizedBox(width: 2),
+                              // Botón Stop - Tamaño: 30px
                               IconButton(
                                 icon: Icon(Icons.stop_circle,
                                     color: Colors.white),
-                                iconSize: 40,
+                                iconSize: 30,
+                                padding: EdgeInsets.all(2),
+                                constraints: BoxConstraints(),
                                 onPressed: _isPlaying ? _stopAudio : null,
                               ),
-                              SizedBox(
-                                  width:
-                                      12), // <-- Separación entre botones principales
-                              // Botón Siguiente - Tamaño: 32px
+                              SizedBox(width: 2),
+                              // Botón Siguiente - Tamaño: 24px
                               IconButton(
                                 icon:
                                     Icon(Icons.skip_next, color: Colors.white),
-                                iconSize: 32,
+                                iconSize: 24,
+                                padding: EdgeInsets.all(2),
+                                constraints: BoxConstraints(),
                                 onPressed: _playlist.length > 1
                                     ? () async {
                                         if (_isRandom) {
@@ -311,9 +426,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                           setState(() {
                                             _currentIndex = random.first;
                                           });
-                                          await _audioPlayer.setFilePath(
-                                              _playlist[_currentIndex]);
-                                          _audioPlayer.play();
+                                          await _audioPlayer.play(
+                                              DeviceFileSource(
+                                                  _playlist[_currentIndex]));
                                           setState(() => _isPlaying = true);
                                         } else if (_currentIndex <
                                             _playlist.length - 1) {
@@ -325,10 +440,8 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                       }
                                     : null,
                               ),
-                              SizedBox(
-                                  width:
-                                      12), // <-- Separación entre botones principales
-                              // Botón Mute - Tamaño: 32px
+                              SizedBox(width: 2),
+                              // Botón Mute - Tamaño: 24px
                               IconButton(
                                 icon: Icon(
                                   _isMuted ? Icons.volume_off : Icons.volume_up,
@@ -336,36 +449,36 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                       ? Colors.redAccent
                                       : Colors.white,
                                 ),
-                                iconSize: 32,
+                                iconSize: 24,
+                                padding: EdgeInsets.all(2),
+                                constraints: BoxConstraints(),
                                 onPressed: () {
                                   setState(() {
                                     if (_isMuted) {
                                       _audioPlayer.setVolume(_lastVolume);
                                       _isMuted = false;
                                     } else {
-                                      _lastVolume = _audioPlayer.volume;
+                                      _lastVolume = 1.0;
                                       _audioPlayer.setVolume(0.0);
                                       _isMuted = true;
                                     }
                                   });
                                 },
                               ),
-                              SizedBox(
-                                  width:
-                                      12), // <-- Separación entre botones principales
-                              // Slider Volumen - Ancho: 70px
+                              SizedBox(width: 2),
+                              // Slider Volumen - Ancho: 50px
                               Container(
-                                width: 70,
+                                width: 50,
                                 child: SliderTheme(
                                   data: SliderTheme.of(context).copyWith(
-                                    trackHeight: 3.0,
+                                    trackHeight: 2.0,
                                     thumbShape: RoundSliderThumbShape(
-                                        enabledThumbRadius: 6.0),
+                                        enabledThumbRadius: 4.0),
                                     overlayShape: RoundSliderOverlayShape(
-                                        overlayRadius: 12.0),
+                                        overlayRadius: 8.0),
                                   ),
                                   child: Slider(
-                                    value: _audioPlayer.volume,
+                                    value: 1.0,
                                     onChanged: (value) {
                                       setState(() {
                                         _audioPlayer.setVolume(value);
@@ -388,7 +501,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                           ),
                         ],
                       ),
-                      SizedBox(height: 8),
+                      SizedBox(height: 6),
                       // Fila de botones secundarios
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -399,28 +512,35 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                               backgroundColor: !_isRandom
                                   ? Colors.blueAccent
                                   : Colors.blueGrey[700],
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 4),
                             ),
                             icon: Icon(Icons.format_list_numbered,
-                                color: Colors.white),
+                                color: Colors.white, size: 16),
                             label: Text('Secuencial',
-                                style: TextStyle(color: Colors.white)),
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 11)),
                             onPressed: () {
                               setState(() {
                                 _isRandom = false;
                               });
                             },
                           ),
-                          SizedBox(width: 8),
+                          SizedBox(width: 4),
                           // Botón Aleatorio
                           ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
                               backgroundColor: _isRandom
                                   ? Colors.blueAccent
                                   : Colors.blueGrey[700],
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 4),
                             ),
-                            icon: Icon(Icons.shuffle, color: Colors.white),
+                            icon: Icon(Icons.shuffle,
+                                color: Colors.white, size: 16),
                             label: Text('Aleatorio',
-                                style: TextStyle(color: Colors.white)),
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 11)),
                             onPressed: () {
                               setState(() {
                                 _isRandom = true;
@@ -450,7 +570,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   ),
                 ),
                 // Ecualizador funcional de 7 bandas tipo Winamp
-                SizedBox(height: 12),
+                SizedBox(height: 4),
                 WinampEqualizer(
                   onBandValuesChanged: (values) {
                     // Aquí puedes guardar los valores del ecualizador
@@ -458,14 +578,14 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                     print('Valores del ecualizador: $values');
                   },
                 ),
-                SizedBox(height: 12),
+                SizedBox(height: 4),
                 // Lista de reproducción
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
                   child: Text(
                     'Lista de reproducción',
                     style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: Colors.white),
                   ),
@@ -626,7 +746,8 @@ class WinampEqualizer extends StatefulWidget {
 
 class _WinampEqualizerState extends State<WinampEqualizer> {
   List<double> _bandValues = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-  bool _isEnabled = false; // Estado del ecualizador (ON/OFF)
+  bool _isEnabled =
+      true; // Estado del ecualizador (ON/OFF) - Activado por defecto
 
   // Frecuencias para las 7 bandas (típicas en ecualizadores)
   final List<String> _frequencies = [
@@ -644,6 +765,11 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
       _bandValues[bandIndex] = value;
     });
 
+    // Enviar valor al ecualizador nativo si está habilitado
+    if (_isEnabled && Platform.isAndroid) {
+      EqualizerChannel.setBandLevel(bandIndex, value);
+    }
+
     // Notificar cambios al padre si se proporciona callback
     if (widget.onBandValuesChanged != null) {
       widget.onBandValuesChanged!(_bandValues);
@@ -654,21 +780,31 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
     for (int i = 0; i < 7; i++) {
       _onBandValueChanged(i, 0.0);
     }
+
+    // Resetear en el ecualizador nativo
+    if (Platform.isAndroid) {
+      EqualizerChannel.resetBands();
+    }
   }
 
   void _applyPreset(List<double> values) {
     for (int i = 0; i < 7; i++) {
       _onBandValueChanged(i, values[i]);
     }
+
+    // Aplicar preajuste en el ecualizador nativo si está habilitado
+    if (_isEnabled && Platform.isAndroid) {
+      EqualizerChannel.applyPreset(values);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(16),
+      padding: EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.grey[700]!),
       ),
       child: Column(
@@ -683,7 +819,7 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
                 style: TextStyle(
                   color: Colors.greenAccent,
                   fontWeight: FontWeight.bold,
-                  fontSize: 16,
+                  fontSize: 12,
                 ),
               ),
               Row(
@@ -692,17 +828,31 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
                   Container(
                     decoration: BoxDecoration(
                       color: _isEnabled ? Colors.green[700] : Colors.red[700],
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(16),
                     ),
                     child: IconButton(
+                      iconSize: 18,
+                      padding: EdgeInsets.all(4),
+                      constraints: BoxConstraints(),
                       icon: Icon(
                         _isEnabled ? Icons.power_settings_new : Icons.power_off,
                         color: Colors.white,
                       ),
-                      onPressed: () {
+                      onPressed: () async {
                         setState(() {
                           _isEnabled = !_isEnabled;
                         });
+
+                        // Activar/desactivar en el ecualizador nativo
+                        if (Platform.isAndroid) {
+                          if (_isEnabled) {
+                            // Re-inicializar antes de activar para asegurar que esté listo
+                            await EqualizerChannel.initializeEqualizer(0);
+                          }
+                          await EqualizerChannel.setEqualizerEnabled(
+                              _isEnabled);
+                        }
+
                         // Notificar cambio de estado
                         if (widget.onBandValuesChanged != null) {
                           widget.onBandValuesChanged!(
@@ -714,9 +864,12 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
                           : 'Encender ecualizador',
                     ),
                   ),
-                  SizedBox(width: 8),
+                  SizedBox(width: 4),
                   // Botón Reset
                   IconButton(
+                    iconSize: 18,
+                    padding: EdgeInsets.all(4),
+                    constraints: BoxConstraints(),
                     icon: Icon(Icons.refresh, color: Colors.white),
                     onPressed: _resetEqualizer,
                     tooltip: 'Resetear ecualizador',
@@ -726,7 +879,7 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
             ],
           ),
 
-          SizedBox(height: 20),
+          SizedBox(height: 8),
 
           // Sliders del ecualizador
           Row(
@@ -734,7 +887,7 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
             children: List.generate(7, (index) => _buildBandSlider(index)),
           ),
 
-          SizedBox(height: 10),
+          SizedBox(height: 6),
 
           // Preajustes rápidos
           _buildPresetButtons(),
@@ -749,33 +902,33 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
       children: [
         // Valor numérico
         Container(
-          width: 40,
-          height: 20,
+          width: 32,
+          height: 14,
           decoration: BoxDecoration(
             color: Colors.black,
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(2),
           ),
           child: Center(
             child: Text(
               '${_bandValues[bandIndex].toStringAsFixed(1)}dB',
               style: TextStyle(
                 color: Colors.greenAccent,
-                fontSize: 10,
+                fontSize: 7,
                 fontWeight: FontWeight.bold,
               ),
             ),
           ),
         ),
 
-        SizedBox(height: 8),
+        SizedBox(height: 3),
 
         // Slider vertical
         Container(
-          width: 40,
-          height: 120,
+          width: 32,
+          height: 80,
           decoration: BoxDecoration(
             color: Colors.grey[800],
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(14),
           ),
           child: RotatedBox(
             quarterTurns: 3,
@@ -795,14 +948,14 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
           ),
         ),
 
-        SizedBox(height: 8),
+        SizedBox(height: 4),
 
         // Etiqueta de frecuencia
         Text(
           _frequencies[bandIndex],
           style: TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 9,
           ),
         ),
       ],
@@ -811,8 +964,8 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
 
   Widget _buildPresetButtons() {
     return Wrap(
-      spacing: 8,
-      runSpacing: 4,
+      spacing: 4,
+      runSpacing: 2,
       children: [
         _buildPresetButton('Flat', [0, 0, 0, 0, 0, 0, 0]),
         _buildPresetButton('Rock', [4, 3, 0, 2, 3, 4, 2]),
@@ -828,12 +981,14 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
       onPressed: _isEnabled ? () => _applyPreset(values) : null,
       style: ElevatedButton.styleFrom(
         backgroundColor: _isEnabled ? Colors.grey[800] : Colors.grey[900],
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        minimumSize: Size(0, 0),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       child: Text(
         name,
         style: TextStyle(
-            fontSize: 12, color: _isEnabled ? Colors.white : Colors.grey[600]),
+            fontSize: 10, color: _isEnabled ? Colors.white : Colors.grey[600]),
       ),
     );
   }

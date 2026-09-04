@@ -2,7 +2,9 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
 void main() {
@@ -89,6 +91,8 @@ class EqualizerChannel {
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({Key? key}) : super(key: key);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -113,8 +117,17 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   bool _isPlaying = false;
   bool _isRandom = false;
   bool _fadeEnabled = false;
+  bool _reverbEnabled = false;
+  bool _delayEnabled = false;
+  double _reverbLevel = 0.5;
+  double _delayLevel = 0.5;
   bool _isMuted = false;
+  double _volume = 1.0;
   double _lastVolume = 1.0;
+  double _fadeDurationSeconds = 0.5;
+  bool _isTransitioning = false;
+  String? _musicFolder;
+  List<double> _equalizerValues = List.filled(7, 0.0);
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
 
@@ -122,6 +135,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   void initState() {
     super.initState();
     _audioPlayer = AudioPlayer();
+    _loadPreferences();
 
     // Configurar el contexto de audio para Android
     if (Platform.isAndroid) {
@@ -153,10 +167,81 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
     // Listener para la posición
     _audioPlayer.onPositionChanged.listen((Duration p) {
+      if (!mounted) return;
       setState(() => _position = p);
+      if (_fadeEnabled &&
+          !_isTransitioning &&
+          _duration > Duration.zero &&
+          _duration - p <= _fadeDuration &&
+          p < _duration) {
+        _playNextWithFade();
+      }
     });
+  }
 
-    _loadMusicFromDevice();
+  Duration get _fadeDuration =>
+      Duration(milliseconds: (_fadeDurationSeconds * 1000).round());
+
+  Future<void> _loadPreferences() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _fadeEnabled = preferences.getBool('fade_enabled') ?? false;
+      _fadeDurationSeconds = preferences.getDouble('fade_duration') ?? 0.5;
+      _reverbEnabled = preferences.getBool('reverb_enabled') ?? false;
+      _delayEnabled = preferences.getBool('delay_enabled') ?? false;
+      _reverbLevel = preferences.getDouble('reverb_level') ?? 0.5;
+      _delayLevel = preferences.getDouble('delay_level') ?? 0.5;
+      _musicFolder = preferences.getString('music_folder');
+      final savedBands = preferences.getStringList('equalizer_bands');
+      if (savedBands != null && savedBands.length == 7) {
+        _equalizerValues = savedBands.map(double.parse).toList();
+      }
+    });
+    if (_musicFolder != null) {
+      await _loadMusicFromFolder(_musicFolder!);
+    } else {
+      await _loadMusicFromDevice();
+    }
+  }
+
+  Future<void> _saveFadePreferences() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool('fade_enabled', _fadeEnabled);
+    await preferences.setDouble('fade_duration', _fadeDurationSeconds);
+  }
+
+  Future<void> _saveEffectPreferences() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool('reverb_enabled', _reverbEnabled);
+    await preferences.setBool('delay_enabled', _delayEnabled);
+    await preferences.setDouble('reverb_level', _reverbLevel);
+    await preferences.setDouble('delay_level', _delayLevel);
+  }
+
+  String _formatDuration(Duration value) {
+    final minutes = value.inMinutes;
+    final seconds = (value.inSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  Future<void> _seekTo(double value) async {
+    if (_duration <= Duration.zero) return;
+    final position = Duration(
+      milliseconds: (value.clamp(0.0, 1.0) * _duration.inMilliseconds).round(),
+    );
+    await _audioPlayer.seek(position);
+  }
+
+  Future<void> _selectMusicFolder() async {
+    final folder = await FilePicker.getDirectoryPath();
+    if (folder == null) return;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('music_folder', folder);
+    if (!mounted) return;
+    setState(() => _musicFolder = folder);
+    await _loadMusicFromFolder(folder);
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _initializeEqualizer() async {
@@ -170,6 +255,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
       // ACTIVAR el ecualizador inmediatamente
       await EqualizerChannel.setEqualizerEnabled(true);
+      if (_equalizerValues.any((value) => value != 0.0)) {
+        await EqualizerChannel.applyPreset(_equalizerValues);
+      }
       print('Ecualizador activado y listo');
     } catch (e) {
       print('Error al inicializar ecualizador: $e');
@@ -208,26 +296,24 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         }
       }
     }
-    // Ruta absoluta para la carpeta Music/Cristiana
-    final musicDir = Directory('/storage/emulated/0/Music/Cristiana');
+    final musicDir =
+        Directory(_musicFolder ?? '/storage/emulated/0/Music/Cristiana');
+    await _loadMusicFromFolder(musicDir.path);
+  }
+
+  Future<void> _loadMusicFromFolder(String folderPath) async {
+    final musicDir = Directory(folderPath);
     if (await musicDir.exists()) {
       final files = musicDir
-          .listSync()
-          .where((f) => f.path.endsWith('.mp3'))
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.toLowerCase().endsWith('.mp3'))
           .map((f) => f.path)
           .toList();
-      print('Archivos encontrados en /storage/emulated/0/Music/Cristiana:');
-      for (var f in files) {
-        print(f);
-      }
-      setState(() {
-        _playlist = files;
-      });
-    } else {
-      print('La carpeta /storage/emulated/0/Music/Cristiana no existe');
-      setState(() {
-        _playlist = [];
-      });
+      if (!mounted) return;
+      setState(() => _playlist = files);
+    } else if (mounted) {
+      setState(() => _playlist = []);
     }
   }
 
@@ -235,6 +321,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     try {
       if (_playlist.isEmpty) return;
 
+      await _audioPlayer.setVolume(_volume);
       await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
       setState(() => _isPlaying = true);
     } catch (e) {
@@ -252,20 +339,15 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   Future<void> _playNextWithFade() async {
-    if (_playlist.isEmpty) return;
-    if (_fadeEnabled) {
-      // Fade-out
-      for (double v = 1.0; v > 0.0; v -= 0.1) {
-        await _audioPlayer.setVolume(v);
-        await Future.delayed(Duration(milliseconds: 50));
-      }
-    }
+    if (_playlist.isEmpty || _isTransitioning) return;
+    _isTransitioning = true;
     int nextIndex;
     if (_isRandom) {
       final random = List<int>.generate(_playlist.length, (i) => i)
         ..remove(_currentIndex);
       if (random.isEmpty) {
         setState(() => _isPlaying = false);
+        _isTransitioning = false;
         return;
       }
       random.shuffle();
@@ -275,23 +357,174 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         nextIndex = _currentIndex + 1;
       } else {
         setState(() => _isPlaying = false);
+        _isTransitioning = false;
         return;
       }
     }
+    final shouldFade = _fadeEnabled && _fadeDuration > Duration.zero;
+    if (shouldFade) {
+      await _fadeVolume(from: _volume, to: 0.0);
+    }
     setState(() => _currentIndex = nextIndex);
 
-    if (_fadeEnabled) {
-      // Fade-in
+    if (shouldFade) {
       await _audioPlayer.setVolume(0.0);
       await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
-      for (double v = 0.0; v <= 1.0; v += 0.1) {
-        await _audioPlayer.setVolume(v);
-        await Future.delayed(Duration(milliseconds: 50));
-      }
+      await _fadeVolume(from: 0.0, to: _volume);
     } else {
       await _audioPlayer.play(DeviceFileSource(_playlist[_currentIndex]));
     }
-    setState(() => _isPlaying = true);
+    if (mounted) setState(() => _isPlaying = true);
+    _isTransitioning = false;
+  }
+
+  Future<void> _fadeVolume({required double from, required double to}) async {
+    const steps = 10;
+    final delay =
+        Duration(milliseconds: (_fadeDuration.inMilliseconds / steps).round());
+    for (var step = 1; step <= steps; step++) {
+      final value = from + (to - from) * step / steps;
+      await _audioPlayer.setVolume(value.clamp(0.0, 1.0));
+      await Future.delayed(delay);
+    }
+  }
+
+  void _updateEqualizer(List<double> values) {
+    _equalizerValues = List<double>.from(values);
+    SharedPreferences.getInstance().then((preferences) {
+      preferences.setStringList(
+        'equalizer_bands',
+        _equalizerValues.map((value) => value.toString()).toList(),
+      );
+    });
+  }
+
+  Future<void> _showPlaybackSettings() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Configuración de reproducción'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Fundido cruzado'),
+                value: _fadeEnabled,
+                onChanged: (value) {
+                  setDialogState(() => _fadeEnabled = value);
+                  _saveFadePreferences();
+                  setState(() {});
+                },
+              ),
+              _buildEffectSetting(
+                context: context,
+                label: 'Reverb',
+                enabled: _reverbEnabled,
+                level: _reverbLevel,
+                onEnabledChanged: (value) {
+                  setDialogState(() => _reverbEnabled = value);
+                  _saveEffectPreferences();
+                  setState(() {});
+                },
+                onLevelChanged: (value) {
+                  setDialogState(() => _reverbLevel = value);
+                  _saveEffectPreferences();
+                },
+              ),
+              _buildEffectSetting(
+                context: context,
+                label: 'Delay',
+                enabled: _delayEnabled,
+                level: _delayLevel,
+                onEnabledChanged: (value) {
+                  setDialogState(() => _delayEnabled = value);
+                  _saveEffectPreferences();
+                  setState(() {});
+                },
+                onLevelChanged: (value) {
+                  setDialogState(() => _delayLevel = value);
+                  _saveEffectPreferences();
+                },
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Duración'),
+                  IconButton(
+                    icon: const Icon(Icons.remove),
+                    onPressed: () {
+                      setDialogState(() => _fadeDurationSeconds =
+                          (_fadeDurationSeconds - 0.1).clamp(0.0, 30.0));
+                      _saveFadePreferences();
+                    },
+                  ),
+                  Text('${_fadeDurationSeconds.toStringAsFixed(1)} s'),
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () {
+                      setDialogState(() => _fadeDurationSeconds =
+                          (_fadeDurationSeconds + 0.1).clamp(0.0, 30.0));
+                      _saveFadePreferences();
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEffectSetting({
+    required BuildContext context,
+    required String label,
+    required bool enabled,
+    required double level,
+    required ValueChanged<bool> onEnabledChanged,
+    required ValueChanged<double> onLevelChanged,
+  }) {
+    return Column(
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(label),
+          value: enabled,
+          onChanged: onEnabledChanged,
+        ),
+        Row(
+          children: [
+            Expanded(child: Text('Nivel: ${(level * 100).round()}%')),
+            IconButton(
+              icon: const Icon(Icons.remove),
+              onPressed: () => onLevelChanged((level - 0.1).clamp(0.0, 1.0)),
+            ),
+            SizedBox(
+              width: 90,
+              child: Slider(
+                value: level,
+                min: 0.0,
+                max: 1.0,
+                divisions: 10,
+                onChanged: onLevelChanged,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add),
+              onPressed: () => onLevelChanged((level + 0.1).clamp(0.0, 1.0)),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
@@ -300,9 +533,42 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.blue[900],
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu, color: Colors.white),
+            tooltip: 'Abrir menú',
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: Text('Reproductor MP3',
             style: TextStyle(color: Colors.white, fontSize: 16)),
         elevation: 0,
+      ),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            const DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blue),
+              child: Text('Reproductor MP3',
+                  style: TextStyle(color: Colors.white, fontSize: 20)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open),
+              title: const Text('Carpeta de música'),
+              subtitle: Text(_musicFolder ?? 'No seleccionada'),
+              onTap: _selectMusicFolder,
+            ),
+            ListTile(
+              leading: const Icon(Icons.tune),
+              title: const Text('Reproducción avanzada'),
+              onTap: () {
+                Navigator.of(context).pop();
+                _showPlaybackSettings();
+              },
+            ),
+          ],
+        ),
       ),
       body: _playlist.isEmpty
           ? Center(
@@ -330,21 +596,62 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      Text(
-                        '${_duration.inMinutes}:${(_duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
                     ],
                   ),
                 ),
-                // Barra de progreso
-                LinearProgressIndicator(
-                  value: (_duration.inMilliseconds > 0)
-                      ? _position.inMilliseconds / _duration.inMilliseconds
-                      : 0.0,
-                  backgroundColor: Colors.blueGrey[800],
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
-                  minHeight: 6,
+                // Barra de progreso interactiva y tiempos de reproducción
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 38,
+                      child: Text(
+                        _formatDuration(_position),
+                        textAlign: TextAlign.right,
+                        style: TextStyle(color: Colors.white70, fontSize: 10),
+                      ),
+                    ),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 5.0,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6.0,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 12.0,
+                          ),
+                        ),
+                        child: Slider(
+                          value: _duration.inMilliseconds > 0
+                              ? (_position.inMilliseconds /
+                                      _duration.inMilliseconds)
+                                  .clamp(0.0, 1.0)
+                              : 0.0,
+                          onChanged: _duration > Duration.zero
+                              ? (value) {
+                                  setState(() {
+                                    _position = Duration(
+                                      milliseconds:
+                                          (value * _duration.inMilliseconds)
+                                              .round(),
+                                    );
+                                  });
+                                }
+                              : null,
+                          onChangeEnd: _seekTo,
+                          activeColor: Colors.blueAccent,
+                          inactiveColor: Colors.blueGrey[800],
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 38,
+                      child: Text(
+                        _formatDuration(_duration),
+                        style: TextStyle(color: Colors.white70, fontSize: 10),
+                      ),
+                    ),
+                  ],
                 ),
                 // Panel de controles
                 Container(
@@ -456,9 +763,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                   setState(() {
                                     if (_isMuted) {
                                       _audioPlayer.setVolume(_lastVolume);
+                                      _volume = _lastVolume;
                                       _isMuted = false;
                                     } else {
-                                      _lastVolume = 1.0;
+                                      _lastVolume = _volume;
                                       _audioPlayer.setVolume(0.0);
                                       _isMuted = true;
                                     }
@@ -466,21 +774,22 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                                 },
                               ),
                               SizedBox(width: 2),
-                              // Slider Volumen - Ancho: 50px
+                              // Slider Volumen - Ancho: 64px
                               Container(
-                                width: 50,
+                                width: 64,
                                 child: SliderTheme(
                                   data: SliderTheme.of(context).copyWith(
-                                    trackHeight: 2.0,
+                                    trackHeight: 3.0,
                                     thumbShape: RoundSliderThumbShape(
-                                        enabledThumbRadius: 4.0),
+                                        enabledThumbRadius: 5.0),
                                     overlayShape: RoundSliderOverlayShape(
-                                        overlayRadius: 8.0),
+                                        overlayRadius: 10.0),
                                   ),
                                   child: Slider(
-                                    value: 1.0,
+                                    value: _volume,
                                     onChanged: (value) {
                                       setState(() {
+                                        _volume = value;
                                         _audioPlayer.setVolume(value);
                                         if (value == 0.0) {
                                           _isMuted = true;
@@ -502,69 +811,116 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                         ],
                       ),
                       SizedBox(height: 6),
-                      // Fila de botones secundarios
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          // Botón Secuencial
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: !_isRandom
-                                  ? Colors.blueAccent
-                                  : Colors.blueGrey[700],
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 4),
+                      // Fila de efectos desplazable en pantallas estrechas
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // Botón Secuencial
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: !_isRandom
+                                    ? Colors.blueAccent
+                                    : Colors.blueGrey[700],
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 4),
+                              ),
+                              icon: Icon(Icons.format_list_numbered,
+                                  color: Colors.white, size: 16),
+                              label: Text('Secuencial',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 11)),
+                              onPressed: () {
+                                setState(() {
+                                  _isRandom = false;
+                                });
+                              },
                             ),
-                            icon: Icon(Icons.format_list_numbered,
-                                color: Colors.white, size: 16),
-                            label: Text('Secuencial',
-                                style: TextStyle(
-                                    color: Colors.white, fontSize: 11)),
-                            onPressed: () {
-                              setState(() {
-                                _isRandom = false;
-                              });
-                            },
-                          ),
-                          SizedBox(width: 4),
-                          // Botón Aleatorio
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _isRandom
-                                  ? Colors.blueAccent
-                                  : Colors.blueGrey[700],
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 4),
+                            SizedBox(width: 4),
+                            // Botón Aleatorio
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _isRandom
+                                    ? Colors.blueAccent
+                                    : Colors.blueGrey[700],
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 4),
+                              ),
+                              icon: Icon(Icons.shuffle,
+                                  color: Colors.white, size: 16),
+                              label: Text('Aleatorio',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 11)),
+                              onPressed: () {
+                                setState(() {
+                                  _isRandom = true;
+                                });
+                              },
                             ),
-                            icon: Icon(Icons.shuffle,
-                                color: Colors.white, size: 16),
-                            label: Text('Aleatorio',
-                                style: TextStyle(
-                                    color: Colors.white, fontSize: 11)),
-                            onPressed: () {
-                              setState(() {
-                                _isRandom = true;
-                              });
-                            },
-                          ),
-                          SizedBox(width: 8),
-                          // Botón Fade
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _fadeEnabled
-                                  ? Colors.blueAccent
-                                  : Colors.blueGrey[700],
+                            SizedBox(width: 8),
+                            // Botón Fade
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _fadeEnabled
+                                    ? Colors.blueAccent
+                                    : Colors.blueGrey[700],
+                              ),
+                              icon: Icon(Icons.blur_on, color: Colors.white),
+                              label: Text('Fade',
+                                  style: TextStyle(color: Colors.white)),
+                              onPressed: () {
+                                setState(() {
+                                  _fadeEnabled = !_fadeEnabled;
+                                });
+                                _saveFadePreferences();
+                              },
                             ),
-                            icon: Icon(Icons.blur_on, color: Colors.white),
-                            label: Text('Fade',
-                                style: TextStyle(color: Colors.white)),
-                            onPressed: () {
-                              setState(() {
-                                _fadeEnabled = !_fadeEnabled;
-                              });
-                            },
-                          ),
-                        ],
+                            SizedBox(width: 4),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _reverbEnabled
+                                    ? Colors.blueAccent
+                                    : Colors.blueGrey[700],
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 4),
+                                minimumSize: Size(0, 0),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              icon: Icon(Icons.graphic_eq,
+                                  color: Colors.white, size: 16),
+                              label: Text('Reverb',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 11)),
+                              onPressed: () {
+                                setState(
+                                    () => _reverbEnabled = !_reverbEnabled);
+                                _saveEffectPreferences();
+                              },
+                            ),
+                            SizedBox(width: 4),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _delayEnabled
+                                    ? Colors.blueAccent
+                                    : Colors.blueGrey[700],
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 4),
+                                minimumSize: Size(0, 0),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              icon: Icon(Icons.timer,
+                                  color: Colors.white, size: 16),
+                              label: Text('Delay',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 11)),
+                              onPressed: () {
+                                setState(() => _delayEnabled = !_delayEnabled);
+                                _saveEffectPreferences();
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -573,10 +929,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 SizedBox(height: 4),
                 WinampEqualizer(
                   onBandValuesChanged: (values) {
-                    // Aquí puedes guardar los valores del ecualizador
-                    // y aplicarlos al audio cuando sea posible
-                    print('Valores del ecualizador: $values');
+                    _updateEqualizer(values);
                   },
+                  initialBandValues: _equalizerValues,
                 ),
                 SizedBox(height: 4),
                 // Lista de reproducción
@@ -592,7 +947,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 ),
                 Expanded(
                   child: ReorderableListView(
-                    onReorder: (oldIndex, newIndex) {
+                    onReorderItem: (oldIndex, newIndex) {
                       setState(() {
                         if (newIndex > oldIndex) newIndex -= 1;
                         final item = _playlist.removeAt(oldIndex);
@@ -737,8 +1092,13 @@ class _TurntableWidgetState extends State<TurntableWidget>
 // Widget del Ecualizador tipo Winamp
 class WinampEqualizer extends StatefulWidget {
   final Function(List<double>)? onBandValuesChanged;
+  final List<double> initialBandValues;
 
-  const WinampEqualizer({Key? key, this.onBandValuesChanged}) : super(key: key);
+  const WinampEqualizer({
+    Key? key,
+    this.onBandValuesChanged,
+    this.initialBandValues = const [0, 0, 0, 0, 0, 0, 0],
+  }) : super(key: key);
 
   @override
   _WinampEqualizerState createState() => _WinampEqualizerState();
@@ -759,6 +1119,25 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
     '6kHz',
     '15kHz'
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialBandValues.length == 7) {
+      _bandValues = List<double>.from(widget.initialBandValues);
+    }
+  }
+
+  @override
+  void didUpdateWidget(WinampEqualizer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialBandValues != widget.initialBandValues &&
+        widget.initialBandValues.length == 7) {
+      setState(() {
+        _bandValues = List<double>.from(widget.initialBandValues);
+      });
+    }
+  }
 
   void _onBandValueChanged(int bandIndex, double value) {
     setState(() {
@@ -825,43 +1204,53 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
               Row(
                 children: [
                   // Botón ON/OFF
-                  Container(
-                    decoration: BoxDecoration(
-                      color: _isEnabled ? Colors.green[700] : Colors.red[700],
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: IconButton(
-                      iconSize: 18,
-                      padding: EdgeInsets.all(4),
-                      constraints: BoxConstraints(),
-                      icon: Icon(
-                        _isEnabled ? Icons.power_settings_new : Icons.power_off,
-                        color: Colors.white,
+                  SizedBox(
+                    width: 38,
+                    height: 38,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _isEnabled ? Colors.green[700] : Colors.red[700],
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      onPressed: () async {
-                        setState(() {
-                          _isEnabled = !_isEnabled;
-                        });
+                      child: IconButton(
+                        iconSize: 14,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 38,
+                          height: 38,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          _isEnabled
+                              ? Icons.power_settings_new
+                              : Icons.power_off,
+                          color: Colors.white,
+                        ),
+                        onPressed: () async {
+                          setState(() {
+                            _isEnabled = !_isEnabled;
+                          });
 
-                        // Activar/desactivar en el ecualizador nativo
-                        if (Platform.isAndroid) {
-                          if (_isEnabled) {
-                            // Re-inicializar antes de activar para asegurar que esté listo
-                            await EqualizerChannel.initializeEqualizer(0);
+                          // Activar/desactivar en el ecualizador nativo
+                          if (Platform.isAndroid) {
+                            if (_isEnabled) {
+                              // Re-inicializar antes de activar para asegurar que esté listo
+                              await EqualizerChannel.initializeEqualizer(0);
+                            }
+                            await EqualizerChannel.setEqualizerEnabled(
+                                _isEnabled);
                           }
-                          await EqualizerChannel.setEqualizerEnabled(
-                              _isEnabled);
-                        }
 
-                        // Notificar cambio de estado
-                        if (widget.onBandValuesChanged != null) {
-                          widget.onBandValuesChanged!(
-                              _isEnabled ? _bandValues : List.filled(7, 0.0));
-                        }
-                      },
-                      tooltip: _isEnabled
-                          ? 'Apagar ecualizador'
-                          : 'Encender ecualizador',
+                          // Notificar cambio de estado
+                          if (widget.onBandValuesChanged != null) {
+                            widget.onBandValuesChanged!(
+                                _isEnabled ? _bandValues : List.filled(7, 0.0));
+                          }
+                        },
+                        tooltip: _isEnabled
+                            ? 'Apagar ecualizador'
+                            : 'Encender ecualizador',
+                      ),
                     ),
                   ),
                   SizedBox(width: 4),
@@ -925,25 +1314,33 @@ class _WinampEqualizerState extends State<WinampEqualizer> {
         // Slider vertical
         Container(
           width: 32,
-          height: 80,
+          height: 104,
           decoration: BoxDecoration(
             color: Colors.grey[800],
             borderRadius: BorderRadius.circular(14),
           ),
           child: RotatedBox(
             quarterTurns: 3,
-            child: Slider(
-              value: _bandValues[bandIndex],
-              min: -12.0,
-              max: 12.0,
-              divisions: 48,
-              onChanged: _isEnabled
-                  ? (value) => _onBandValueChanged(bandIndex, value)
-                  : null,
-              activeColor: _isEnabled
-                  ? _getSliderColor(_bandValues[bandIndex])
-                  : Colors.grey,
-              inactiveColor: Colors.grey[600],
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 6.0,
+                thumbShape: const RoundSliderThumbShape(
+                  enabledThumbRadius: 6.0,
+                ),
+              ),
+              child: Slider(
+                value: _bandValues[bandIndex],
+                min: -12.0,
+                max: 12.0,
+                divisions: 48,
+                onChanged: _isEnabled
+                    ? (value) => _onBandValueChanged(bandIndex, value)
+                    : null,
+                activeColor: _isEnabled
+                    ? _getSliderColor(_bandValues[bandIndex])
+                    : Colors.grey,
+                inactiveColor: Colors.grey[600],
+              ),
             ),
           ),
         ),
